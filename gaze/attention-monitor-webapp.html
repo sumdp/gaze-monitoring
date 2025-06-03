@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attention Monitor - MediaPipe Face Mesh</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #fff;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .video-container {
+            position: relative;
+            display: inline-block;
+            border: 3px solid #333;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        #videoElement, #canvasElement {
+            display: block;
+            width: 640px;
+            height: 480px;
+        }
+        #canvasElement {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        .stats {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #2a2a2a;
+            border-radius: 10px;
+        }
+        .stat-item {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #333;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .status {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+        }
+        .status.looking { background-color: #4CAF50; }
+        .status.not-looking { background-color: #f44336; }
+        .status.eyes-open { background-color: #4CAF50; }
+        .status.eyes-closed { background-color: #ff9800; }
+        .controls {
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin-right: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #666;
+            cursor: not-allowed;
+        }
+        .thresholds {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 10px;
+        }
+        .threshold-control {
+            margin: 10px 0;
+        }
+        .threshold-control label {
+            display: inline-block;
+            width: 200px;
+        }
+        .threshold-control input {
+            width: 200px;
+        }
+        .threshold-value {
+            display: inline-block;
+            width: 50px;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Attention Monitoring System</h1>
+        <p>This webapp uses MediaPipe Face Mesh to detect if you're looking at the screen and if your eyes are open.</p>
+        
+        <div class="video-container">
+            <video id="videoElement" autoplay></video>
+            <canvas id="canvasElement"></canvas>
+        </div>
+        
+        <div class="stats">
+            <h2>Current Status</h2>
+            <div class="stat-item">
+                <span>Gaze Direction:</span>
+                <span id="gazeStatus" class="status">Initializing...</span>
+            </div>
+            <div class="stat-item">
+                <span>Eye State:</span>
+                <span id="eyeStatus" class="status">Initializing...</span>
+            </div>
+            <div class="stat-item">
+                <span>Attention Score:</span>
+                <span id="attentionScore">0%</span>
+            </div>
+            <div class="stat-item">
+                <span>Time Looking Away:</span>
+                <span id="timeAway">0s</span>
+            </div>
+        </div>
+        
+        <div class="thresholds">
+            <h3>Adjustment Controls</h3>
+            <div class="threshold-control">
+                <label for="eyeThreshold">Eye Closure Threshold:</label>
+                <input type="range" id="eyeThreshold" min="0.1" max="0.3" step="0.01" value="0.21">
+                <span class="threshold-value" id="eyeThresholdValue">0.21</span>
+            </div>
+            <div class="threshold-control">
+                <label for="gazeThreshold">Gaze Threshold (degrees):</label>
+                <input type="range" id="gazeThreshold" min="10" max="45" step="1" value="25">
+                <span class="threshold-value" id="gazeThresholdValue">25°</span>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button id="startBtn">Start Monitoring</button>
+            <button id="stopBtn" disabled>Stop Monitoring</button>
+            <button id="resetBtn">Reset Stats</button>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let video, canvas, ctx;
+        let faceMesh;
+        let isMonitoring = false;
+        let attentionStats = {
+            totalTime: 0,
+            timeAway: 0,
+            lastTimestamp: null,
+            isLooking: true,
+            eyesOpen: true
+        };
+
+        // Eye aspect ratio calculation
+        function calculateEAR(landmarks, indices) {
+            const p1 = landmarks[indices[0]];
+            const p2 = landmarks[indices[1]];
+            const p3 = landmarks[indices[2]];
+            const p4 = landmarks[indices[3]];
+            const p5 = landmarks[indices[4]];
+            const p6 = landmarks[indices[5]];
+
+            const verticalDist1 = Math.sqrt(
+                Math.pow(p2.x - p6.x, 2) + Math.pow(p2.y - p6.y, 2)
+            );
+            const verticalDist2 = Math.sqrt(
+                Math.pow(p3.x - p5.x, 2) + Math.pow(p3.y - p5.y, 2)
+            );
+            const horizontalDist = Math.sqrt(
+                Math.pow(p1.x - p4.x, 2) + Math.pow(p1.y - p4.y, 2)
+            );
+
+            return (verticalDist1 + verticalDist2) / (2.0 * horizontalDist);
+        }
+
+        // Estimate head pose
+        function estimateHeadPose(landmarks) {
+            // Simplified head pose estimation using key facial points
+            const nose = landmarks[1];
+            const leftEye = landmarks[33];
+            const rightEye = landmarks[263];
+            const chin = landmarks[152];
+            
+            // Calculate horizontal angle
+            const eyeCenter = {
+                x: (leftEye.x + rightEye.x) / 2,
+                y: (leftEye.y + rightEye.y) / 2
+            };
+            
+            const horizontalAngle = Math.atan2(nose.x - eyeCenter.x, 0.5) * 180 / Math.PI;
+            const verticalAngle = Math.atan2(nose.y - eyeCenter.y, 0.5) * 180 / Math.PI;
+            
+            return { horizontal: horizontalAngle, vertical: verticalAngle };
+        }
+
+        // Process face detection results
+        function onResults(results) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const landmarks = results.multiFaceLandmarks[0];
+                
+                // Draw face mesh
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 1;
+                
+                // Draw key points for eyes
+                const leftEyeIndices = [33, 160, 158, 133, 153, 144];
+                const rightEyeIndices = [362, 385, 387, 263, 373, 380];
+                
+                // Calculate eye aspect ratios
+                const leftEAR = calculateEAR(landmarks, leftEyeIndices);
+                const rightEAR = calculateEAR(landmarks, rightEyeIndices);
+                const avgEAR = (leftEAR + rightEAR) / 2;
+                
+                // Get threshold values
+                const eyeThreshold = parseFloat(document.getElementById('eyeThreshold').value);
+                const gazeThreshold = parseFloat(document.getElementById('gazeThreshold').value);
+                
+                // Determine eye state
+                const eyesOpen = avgEAR > eyeThreshold;
+                
+                // Estimate head pose
+                const headPose = estimateHeadPose(landmarks);
+                const isLooking = Math.abs(headPose.horizontal) < gazeThreshold && 
+                                 Math.abs(headPose.vertical) < gazeThreshold;
+                
+                // Update status
+                updateStatus(isLooking, eyesOpen);
+                
+                // Draw eye regions
+                drawEyeRegion(ctx, landmarks, leftEyeIndices, eyesOpen);
+                drawEyeRegion(ctx, landmarks, rightEyeIndices, eyesOpen);
+                
+                // Draw gaze direction indicator
+                drawGazeIndicator(ctx, landmarks, headPose, isLooking);
+            }
+        }
+
+        function drawEyeRegion(ctx, landmarks, indices, isOpen) {
+            ctx.beginPath();
+            ctx.strokeStyle = isOpen ? '#00ff00' : '#ff9800';
+            ctx.lineWidth = 2;
+            
+            indices.forEach((idx, i) => {
+                const point = landmarks[idx];
+                const x = point.x * canvas.width;
+                const y = point.y * canvas.height;
+                
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            ctx.closePath();
+            ctx.stroke();
+        }
+
+        function drawGazeIndicator(ctx, landmarks, headPose, isLooking) {
+            const nose = landmarks[1];
+            const centerX = nose.x * canvas.width;
+            const centerY = nose.y * canvas.height;
+            
+            // Draw arrow indicating gaze direction
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate(headPose.horizontal * Math.PI / 180);
+            
+            ctx.beginPath();
+            ctx.strokeStyle = isLooking ? '#00ff00' : '#ff0000';
+            ctx.lineWidth = 3;
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, -30);
+            ctx.stroke();
+            
+            // Arrowhead
+            ctx.beginPath();
+            ctx.moveTo(-5, -25);
+            ctx.lineTo(0, -30);
+            ctx.lineTo(5, -25);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+
+        function updateStatus(isLooking, eyesOpen) {
+            const gazeStatus = document.getElementById('gazeStatus');
+            const eyeStatus = document.getElementById('eyeStatus');
+            
+            // Update UI
+            gazeStatus.textContent = isLooking ? 'Looking at Screen' : 'Looking Away';
+            gazeStatus.className = `status ${isLooking ? 'looking' : 'not-looking'}`;
+            
+            eyeStatus.textContent = eyesOpen ? 'Eyes Open' : 'Eyes Closed';
+            eyeStatus.className = `status ${eyesOpen ? 'eyes-open' : 'eyes-closed'}`;
+            
+            // Update stats
+            if (isMonitoring) {
+                const now = Date.now();
+                if (attentionStats.lastTimestamp) {
+                    const delta = (now - attentionStats.lastTimestamp) / 1000;
+                    attentionStats.totalTime += delta;
+                    
+                    if (!isLooking || !eyesOpen) {
+                        attentionStats.timeAway += delta;
+                    }
+                }
+                attentionStats.lastTimestamp = now;
+                
+                // Update attention score
+                const attentionScore = Math.max(0, 
+                    100 - (attentionStats.timeAway / attentionStats.totalTime * 100)
+                );
+                document.getElementById('attentionScore').textContent = 
+                    attentionScore.toFixed(1) + '%';
+                document.getElementById('timeAway').textContent = 
+                    attentionStats.timeAway.toFixed(1) + 's';
+            }
+            
+            attentionStats.isLooking = isLooking;
+            attentionStats.eyesOpen = eyesOpen;
+        }
+
+        // Initialize MediaPipe Face Mesh
+        async function init() {
+            video = document.getElementById('videoElement');
+            canvas = document.getElementById('canvasElement');
+            ctx = canvas.getContext('2d');
+
+            faceMesh = new FaceMesh({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`;
+                }
+            });
+
+            faceMesh.setOptions({
+                maxNumFaces: 1,
+                refineLandmarks: true,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            faceMesh.onResults(onResults);
+
+            // Set up camera
+            const camera = new Camera(video, {
+                onFrame: async () => {
+                    await faceMesh.send({ image: video });
+                },
+                width: 640,
+                height: 480
+            });
+            camera.start();
+        }
+
+        // Event listeners
+        document.getElementById('startBtn').addEventListener('click', () => {
+            isMonitoring = true;
+            attentionStats.lastTimestamp = Date.now();
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            isMonitoring = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            attentionStats = {
+                totalTime: 0,
+                timeAway: 0,
+                lastTimestamp: null,
+                isLooking: true,
+                eyesOpen: true
+            };
+            document.getElementById('attentionScore').textContent = '0%';
+            document.getElementById('timeAway').textContent = '0s';
+        });
+
+        // Threshold controls
+        document.getElementById('eyeThreshold').addEventListener('input', (e) => {
+            document.getElementById('eyeThresholdValue').textContent = e.target.value;
+        });
+
+        document.getElementById('gazeThreshold').addEventListener('input', (e) => {
+            document.getElementById('gazeThresholdValue').textContent = e.target.value + '°';
+        });
+
+        // Initialize on load
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attention Monitor - Enhanced</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0a0a0a;
+            color: #fff;
+            min-height: 100vh;
+            transition: background-color 0.3s ease;
+            overflow-x: hidden;
+        }
+        
+        /* Alert states for body background */
+        body.alert-warning {
+            background-color: #664400;
+            animation: pulse-warning 1s infinite;
+        }
+        
+        body.alert-danger {
+            background-color: #660000;
+            animation: pulse-danger 1s infinite;
+        }
+        
+        @keyframes pulse-warning {
+            0%, 100% { background-color: #664400; }
+            50% { background-color: #886600; }
+        }
+        
+        @keyframes pulse-danger {
+            0%, 100% { background-color: #660000; }
+            50% { background-color: #880000; }
+        }
+        
+        .alert-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+            display: none;
+            z-index: 10;
+        }
+        
+        body.alert-warning .alert-overlay,
+        body.alert-danger .alert-overlay {
+            display: block;
+        }
+        
+        body.alert-warning .alert-overlay {
+            background: radial-gradient(circle at center, transparent 30%, rgba(255, 193, 7, 0.3) 100%);
+        }
+        
+        body.alert-danger .alert-overlay {
+            background: radial-gradient(circle at center, transparent 30%, rgba(255, 0, 0, 0.3) 100%);
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            position: relative;
+            z-index: 20;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        
+        .subtitle {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #aaa;
+            font-size: 1.1em;
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 30px;
+            align-items: start;
+        }
+        
+        .video-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .video-container {
+            position: relative;
+            display: inline-block;
+            border: 4px solid #333;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            transition: border-color 0.3s ease;
+        }
+        
+        body.alert-warning .video-container {
+            border-color: #ffc107;
+            box-shadow: 0 10px 30px rgba(255, 193, 7, 0.5);
+        }
+        
+        body.alert-danger .video-container {
+            border-color: #dc3545;
+            box-shadow: 0 10px 30px rgba(220, 53, 69, 0.5);
+        }
+        
+        #videoElement, #canvasElement {
+            display: block;
+            width: 640px;
+            height: 480px;
+        }
+        
+        #canvasElement {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        
+        .stats-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .live-stats {
+            background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+        }
+        
+        .live-stats h2 {
+            margin-bottom: 20px;
+            font-size: 1.8em;
+            color: #4CAF50;
+        }
+        
+        .stat-item {
+            margin: 15px 0;
+            padding: 20px;
+            background-color: rgba(255,255,255,0.05);
+            border-radius: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+        
+        .stat-item:hover {
+            background-color: rgba(255,255,255,0.08);
+            transform: translateX(5px);
+        }
+        
+        .stat-label {
+            font-size: 1.1em;
+            font-weight: 500;
+        }
+        
+        .status {
+            padding: 8px 20px;
+            border-radius: 25px;
+            font-weight: bold;
+            font-size: 1.1em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.3s ease;
+        }
+        
+        .status.looking { 
+            background-color: #4CAF50;
+            box-shadow: 0 0 20px rgba(76, 175, 80, 0.5);
+        }
+        
+        .status.not-looking { 
+            background-color: #f44336;
+            box-shadow: 0 0 20px rgba(244, 67, 54, 0.5);
+            animation: blink 1s infinite;
+        }
+        
+        .status.eyes-open { 
+            background-color: #4CAF50;
+            box-shadow: 0 0 20px rgba(76, 175, 80, 0.5);
+        }
+        
+        .status.eyes-closed { 
+            background-color: #ff9800;
+            box-shadow: 0 0 20px rgba(255, 152, 0, 0.5);
+            animation: blink 0.5s infinite;
+        }
+        
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        .attention-score {
+            font-size: 3em;
+            font-weight: bold;
+            text-align: center;
+            margin: 20px 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #333 0%, #444 100%);
+            border-radius: 15px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .attention-score::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 5px;
+            background-color: #4CAF50;
+            transition: width 0.3s ease;
+            width: var(--score-width);
+        }
+        
+        .attention-score.low {
+            color: #f44336;
+        }
+        
+        .attention-score.medium {
+            color: #ff9800;
+        }
+        
+        .attention-score.high {
+            color: #4CAF50;
+        }
+        
+        .time-display {
+            font-size: 2em;
+            font-weight: bold;
+            color: #ff9800;
+        }
+        
+        .controls {
+            background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+        }
+        
+        .controls h3 {
+            margin-bottom: 15px;
+            color: #4CAF50;
+        }
+        
+        button {
+            padding: 12px 25px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+        }
+        
+        button:hover {
+            background-color: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            background-color: #666;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        
+        button.stop {
+            background-color: #f44336;
+        }
+        
+        button.stop:hover {
+            background-color: #da190b;
+        }
+        
+        .thresholds {
+            background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+        }
+        
+        .thresholds h3 {
+            margin-bottom: 20px;
+            color: #4CAF50;
+        }
+        
+        .threshold-control {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: rgba(255,255,255,0.05);
+            border-radius: 10px;
+        }
+        
+        .threshold-control label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: 500;
+            font-size: 1.1em;
+        }
+        
+        .threshold-control input {
+            width: 100%;
+            height: 8px;
+            border-radius: 4px;
+            background: #333;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        .threshold-control input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #4CAF50;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+        }
+        
+        .threshold-value {
+            display: inline-block;
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #4CAF50;
+            margin-left: 10px;
+        }
+        
+        .warning-banner {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 1.3em;
+            font-weight: bold;
+            z-index: 100;
+            display: none;
+            animation: slideDown 0.3s ease;
+        }
+        
+        @keyframes slideDown {
+            from { 
+                transform: translateX(-50%) translateY(-100%);
+                opacity: 0;
+            }
+            to { 
+                transform: translateX(-50%) translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        .warning-banner.show {
+            display: block;
+        }
+        
+        .warning-banner.eyes-closed {
+            background-color: #ff9800;
+            color: #fff;
+            box-shadow: 0 5px 20px rgba(255, 152, 0, 0.5);
+        }
+        
+        .warning-banner.not-looking {
+            background-color: #f44336;
+            color: #fff;
+            box-shadow: 0 5px 20px rgba(244, 67, 54, 0.5);
+        }
+        
+        .warning-banner.no-face {
+            background-color: #9c27b0;
+            color: #fff;
+            box-shadow: 0 5px 20px rgba(156, 39, 176, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div class="alert-overlay"></div>
+    <div class="warning-banner" id="warningBanner"></div>
+    
+    <div class="container">
+        <h1>👁️ Attention Monitoring System</h1>
+        <p class="subtitle">Real-time detection of gaze direction and eye state using MediaPipe</p>
+        
+        <div class="main-content">
+            <div class="video-section">
+                <div class="video-container">
+                    <video id="videoElement" autoplay></video>
+                    <canvas id="canvasElement"></canvas>
+                </div>
+                
+                <div class="controls">
+                    <h3>📊 Monitoring Controls</h3>
+                    <button id="startBtn">▶️ Start Monitoring</button>
+                    <button id="stopBtn" class="stop" disabled>⏹️ Stop Monitoring</button>
+                    <button id="resetBtn">🔄 Reset Stats</button>
+                </div>
+            </div>
+            
+            <div class="stats-section">
+                <div class="live-stats">
+                    <h2>📈 Live Status</h2>
+                    
+                    <div class="stat-item">
+                        <span class="stat-label">👀 Gaze Direction:</span>
+                        <span id="gazeStatus" class="status">Initializing...</span>
+                    </div>
+                    
+                    <div class="stat-item">
+                        <span class="stat-label">👁️ Eye State:</span>
+                        <span id="eyeStatus" class="status">Initializing...</span>
+                    </div>
+                    
+                    <div class="attention-score" id="attentionScoreContainer">
+                        <div style="font-size: 0.4em; color: #aaa; margin-bottom: 5px;">Attention Score</div>
+                        <span id="attentionScore">0%</span>
+                    </div>
+                    
+                    <div class="stat-item">
+                        <span class="stat-label">⏱️ Time Looking Away:</span>
+                        <span id="timeAway" class="time-display">0.0s</span>
+                    </div>
+                    
+                    <div class="stat-item">
+                        <span class="stat-label">⏰ Total Time:</span>
+                        <span id="totalTime" style="font-size: 1.5em;">0.0s</span>
+                    </div>
+                </div>
+                
+                <div class="thresholds">
+                    <h3>⚙️ Sensitivity Settings</h3>
+                    <div class="threshold-control">
+                        <label for="eyeThreshold">
+                            Eye Closure Threshold:
+                            <span class="threshold-value" id="eyeThresholdValue">0.21</span>
+                        </label>
+                        <input type="range" id="eyeThreshold" min="0.1" max="0.3" step="0.01" value="0.21">
+                    </div>
+                    <div class="threshold-control">
+                        <label for="gazeThreshold">
+                            Gaze Threshold:
+                            <span class="threshold-value" id="gazeThresholdValue">25°</span>
+                        </label>
+                        <input type="range" id="gazeThreshold" min="10" max="45" step="1" value="25">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let video, canvas, ctx;
+        let faceMesh;
+        let isMonitoring = false;
+        let noFaceDetectedTime = 0;
+        let updateInterval;
+        
+        let attentionStats = {
+            totalTime: 0,
+            timeAway: 0,
+            lastTimestamp: null,
+            isLooking: true,
+            eyesOpen: true,
+            faceDetected: false
+        };
+
+        // Eye indices for MediaPipe Face Mesh
+        const LEFT_EYE_INDICES = [33, 160, 158, 133, 153, 144];
+        const RIGHT_EYE_INDICES = [362, 385, 387, 263, 373, 380];
+
+        // Eye aspect ratio calculation
+        function calculateEAR(landmarks, indices) {
+            const points = indices.map(i => landmarks[i]);
+            
+            // Calculate vertical distances
+            const v1 = distance(points[1], points[5]);
+            const v2 = distance(points[2], points[4]);
+            
+            // Calculate horizontal distance
+            const h = distance(points[0], points[3]);
+            
+            // EAR formula
+            return (v1 + v2) / (2.0 * h);
+        }
+
+        function distance(p1, p2) {
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+        }
+
+        // Estimate head pose
+        function estimateHeadPose(landmarks) {
+            // Key points for pose estimation
+            const nose = landmarks[1];
+            const forehead = landmarks[10];
+            const chin = landmarks[152];
+            const leftTemple = landmarks[54];
+            const rightTemple = landmarks[284];
+            
+            // Calculate yaw (horizontal rotation)
+            const faceWidth = distance(leftTemple, rightTemple);
+            const leftToNose = distance(leftTemple, nose);
+            const rightToNose = distance(rightTemple, nose);
+            
+            // Estimate horizontal angle based on asymmetry
+            const horizontalRatio = (leftToNose - rightToNose) / faceWidth;
+            const horizontalAngle = horizontalRatio * 45; // Scale to degrees
+            
+            // Calculate pitch (vertical rotation)
+            const faceHeight = distance(forehead, chin);
+            const noseToForehead = distance(nose, forehead);
+            const noseToChin = distance(nose, chin);
+            
+            const verticalRatio = (noseToForehead - noseToChin) / faceHeight;
+            const verticalAngle = verticalRatio * 30; // Scale to degrees
+            
+            return { 
+                horizontal: horizontalAngle, 
+                vertical: verticalAngle,
+                confidence: 1.0 // Could calculate based on landmark visibility
+            };
+        }
+
+        // Update display continuously
+        function startContinuousUpdate() {
+            updateInterval = setInterval(() => {
+                if (isMonitoring && attentionStats.lastTimestamp) {
+                    const now = Date.now();
+                    const delta = (now - attentionStats.lastTimestamp) / 1000;
+                    
+                    // Update times
+                    attentionStats.totalTime += delta;
+                    
+                    if (!attentionStats.isLooking || !attentionStats.eyesOpen || !attentionStats.faceDetected) {
+                        attentionStats.timeAway += delta;
+                    }
+                    
+                    attentionStats.lastTimestamp = now;
+                    
+                    // Update displays
+                    updateDisplays();
+                }
+            }, 100); // Update every 100ms for smooth display
+        }
+
+        function updateDisplays() {
+            // Update time displays
+            document.getElementById('timeAway').textContent = attentionStats.timeAway.toFixed(1) + 's';
+            document.getElementById('totalTime').textContent = attentionStats.totalTime.toFixed(1) + 's';
+            
+            // Calculate and update attention score
+            const attentionScore = attentionStats.totalTime > 0 
+                ? Math.max(0, 100 - (attentionStats.timeAway / attentionStats.totalTime * 100))
+                : 100;
+            
+            const scoreElement = document.getElementById('attentionScore');
+            const scoreContainer = document.getElementById('attentionScoreContainer');
+            
+            scoreElement.textContent = attentionScore.toFixed(1) + '%';
+            scoreContainer.style.setProperty('--score-width', attentionScore + '%');
+            
+            // Update score color based on value
+            scoreContainer.className = 'attention-score';
+            if (attentionScore >= 80) {
+                scoreContainer.classList.add('high');
+            } else if (attentionScore >= 60) {
+                scoreContainer.classList.add('medium');
+            } else {
+                scoreContainer.classList.add('low');
+            }
+        }
+
+        // Process face detection results
+        function onResults(results) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const warningBanner = document.getElementById('warningBanner');
+            
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const landmarks = results.multiFaceLandmarks[0];
+                attentionStats.faceDetected = true;
+                noFaceDetectedTime = 0;
+                
+                // Calculate eye aspect ratios
+                const leftEAR = calculateEAR(landmarks, LEFT_EYE_INDICES);
+                const rightEAR = calculateEAR(landmarks, RIGHT_EYE_INDICES);
+                const avgEAR = (leftEAR + rightEAR) / 2;
+                
+                // Get threshold values
+                const eyeThreshold = parseFloat(document.getElementById('eyeThreshold').value);
+                const gazeThreshold = parseFloat(document.getElementById('gazeThreshold').value);
+                
+                // Determine eye state
+                const eyesOpen = avgEAR > eyeThreshold;
+                
+                // Estimate head pose
+                const headPose = estimateHeadPose(landmarks);
+                const isLooking = Math.abs(headPose.horizontal) < gazeThreshold && 
+                                 Math.abs(headPose.vertical) < gazeThreshold;
+                
+                // Update status
+                updateStatus(isLooking, eyesOpen, true);
+                
+                // Draw visualizations
+                drawFaceMesh(ctx, landmarks);
+                drawEyeRegions(ctx, landmarks, LEFT_EYE_INDICES, RIGHT_EYE_INDICES, eyesOpen);
+                drawGazeIndicator(ctx, landmarks, headPose, isLooking);
+                
+                // Update warning banner
+                if (!eyesOpen) {
+                    warningBanner.textContent = '⚠️ EYES CLOSED - Please keep your eyes open!';
+                    warningBanner.className = 'warning-banner show eyes-closed';
+                } else if (!isLooking) {
+                    warningBanner.textContent = '⚠️ NOT LOOKING AT SCREEN - Please focus on the screen!';
+                    warningBanner.className = 'warning-banner show not-looking';
+                } else {
+                    warningBanner.className = 'warning-banner';
+                }
+                
+                // Update body alert state
+                document.body.className = '';
+                if (!eyesOpen) {
+                    document.body.classList.add('alert-warning');
+                } else if (!isLooking) {
+                    document.body.classList.add('alert-danger');
+                }
+                
+            } else {
+                // No face detected
+                attentionStats.faceDetected = false;
+                noFaceDetectedTime += 0.1; // Approximate frame time
+                
+                if (noFaceDetectedTime > 0.5) { // After 500ms of no face
+                    updateStatus(false, true, false);
+                    
+                    warningBanner.textContent = '⚠️ NO FACE DETECTED - Please position yourself in front of the camera!';
+                    warningBanner.className = 'warning-banner show no-face';
+                    document.body.className = 'alert-danger';
+                }
+            }
+        }
+
+        function drawFaceMesh(ctx, landmarks) {
+            // Draw subtle face mesh
+            ctx.strokeStyle = 'rgba(0, 255, 0, 0.2)';
+            ctx.lineWidth = 0.5;
+            
+            // Draw only key connection lines
+            const connections = [
+                [10, 151], [10, 234], [151, 152], [234, 454], // Face outline
+                [33, 133], [362, 263], // Eyes
+                [61, 291], [78, 308] // Mouth
+            ];
+            
+            connections.forEach(([start, end]) => {
+                const p1 = landmarks[start];
+                const p2 = landmarks[end];
+                ctx.beginPath();
+                ctx.moveTo(p1.x * canvas.width, p1.y * canvas.height);
+                ctx.lineTo(p2.x * canvas.width, p2.y * canvas.height);
+                ctx.stroke();
+            });
+        }
+
+        function drawEyeRegions(ctx, landmarks, leftIndices, rightIndices, eyesOpen) {
+            // Draw left eye
+            drawEyeRegion(ctx, landmarks, leftIndices, eyesOpen);
+            // Draw right eye
+            drawEyeRegion(ctx, landmarks, rightIndices, eyesOpen);
+        }
+
+        function drawEyeRegion(ctx, landmarks, indices, isOpen) {
+            ctx.beginPath();
+            ctx.strokeStyle = isOpen ? '#00ff00' : '#ff9800';
+            ctx.lineWidth = 3;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = isOpen ? '#00ff00' : '#ff9800';
+            
+            indices.forEach((idx, i) => {
+                const point = landmarks[idx];
+                const x = point.x * canvas.width;
+                const y = point.y * canvas.height;
+                
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            ctx.closePath();
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+
+        function drawGazeIndicator(ctx, landmarks, headPose, isLooking) {
+            const nose = landmarks[1];
+            const centerX = nose.x * canvas.width;
+            const centerY = nose.y * canvas.height;
+            
+            // Draw gaze direction arrow
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            
+            // Rotate based on horizontal angle
+            ctx.rotate(headPose.horizontal * Math.PI / 180);
+            
+            // Draw arrow
+            ctx.strokeStyle = isLooking ? '#00ff00' : '#ff0000';
+            ctx.lineWidth = 4;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = isLooking ? '#00ff00' : '#ff0000';
+            
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, -40);
+            ctx.stroke();
+            
+            // Arrowhead
+            ctx.beginPath();
+            ctx.moveTo(-8, -32);
+            ctx.lineTo(0, -40);
+            ctx.lineTo(8, -32);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+
+        function updateStatus(isLooking, eyesOpen, faceDetected) {
+            const gazeStatus = document.getElementById('gazeStatus');
+            const eyeStatus = document.getElementById('eyeStatus');
+            
+            // Update UI elements
+            if (!faceDetected) {
+                gazeStatus.textContent = 'No Face Detected';
+                gazeStatus.className = 'status not-looking';
+                eyeStatus.textContent = 'No Face Detected';
+                eyeStatus.className = 'status not-looking';
+            } else {
+                gazeStatus.textContent = isLooking ? 'Looking at Screen' : 'Looking Away';
+                gazeStatus.className = `status ${isLooking ? 'looking' : 'not-looking'}`;
+                
+                eyeStatus.textContent = eyesOpen ? 'Eyes Open' : 'Eyes Closed';
+                eyeStatus.className = `status ${eyesOpen ? 'eyes-open' : 'eyes-closed'}`;
+            }
+            
+            // Update internal state
+            attentionStats.isLooking = isLooking;
+            attentionStats.eyesOpen = eyesOpen;
+            attentionStats.faceDetected = faceDetected;
+        }
+
+        // Initialize MediaPipe Face Mesh
+        async function init() {
+            video = document.getElementById('videoElement');
+            canvas = document.getElementById('canvasElement');
+            ctx = canvas.getContext('2d');
+
+            faceMesh = new FaceMesh({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`;
+                }
+            });
+
+            faceMesh.setOptions({
+                maxNumFaces: 1,
+                refineLandmarks: true,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            faceMesh.onResults(onResults);
+
+            // Set up camera
+            const camera = new Camera(video, {
+                onFrame: async () => {
+                    await faceMesh.send({ image: video });
+                },
+                width: 640,
+                height: 480
+            });
+            
+            try {
+                await camera.start();
+                console.log('Camera started successfully');
+            } catch (error) {
+                console.error('Error starting camera:', error);
+                alert('Error accessing camera. Please ensure camera permissions are granted.');
+            }
+        }
+
+        // Event listeners
+        document.getElementById('startBtn').addEventListener('click', () => {
+            isMonitoring = true;
+            attentionStats.lastTimestamp = Date.now();
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            
+            // Start continuous display updates
+            startContinuousUpdate();
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            isMonitoring = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            
+            // Stop continuous updates
+            if (updateInterval) {
+                clearInterval(updateInterval);
+                updateInterval = null;
+            }
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            attentionStats = {
+                totalTime: 0,
+                timeAway: 0,
+                lastTimestamp: isMonitoring ? Date.now() : null,
+                isLooking: true,
+                eyesOpen: true,
+                faceDetected: false
+            };
+            
+            updateDisplays();
+            
+            // Clear warnings
+            document.body.className = '';
+            document.getElementById('warningBanner').className = 'warning-banner';
+        });
+
+        // Threshold controls
+        document.getElementById('eyeThreshold').addEventListener('input', (e) => {
+            document.getElementById('eyeThresholdValue').textContent = e.target.value;
+        });
+
+        document.getElementById('gazeThreshold').addEventListener('input', (e) => {
+            document.getElementById('gazeThresholdValue').textContent = e.target.value + '°';
+        });
+
+        // Initialize on load
+        window.addEventListener('load', init);
+        
+        // Cleanup on unload
+        window.addEventListener('beforeunload', () => {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+            }
+        });
+    </script>
+</body>
+</html>
